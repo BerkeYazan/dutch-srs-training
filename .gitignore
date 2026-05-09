@@ -24,11 +24,15 @@ env/
 logs/*
 !logs/.gitkeep
 
-# Per-machine sentence-audio leftovers from the pre-hash scheme. The
-# repo ships hash-named files (16 hex chars + .mp3); these patterns
-# catch the old numeric-id names and any sandbox temp files that
-# should never be committed.
-app/static/audio/sentences/[0-9]*.mp3
+# Per-machine sentence-audio leftovers from the pre-hash scheme.
+# Match numeric-only stems of one to four digits. Hash-named files
+# (16 hex chars) include both letters and digits and must not be
+# excluded, an earlier rule of [0-9]*.mp3 was too greedy and ate
+# hash names starting with 0-9 (about 37 percent of the set).
+app/static/audio/sentences/[0-9].mp3
+app/static/audio/sentences/[0-9][0-9].mp3
+app/static/audio/sentences/[0-9][0-9][0-9].mp3
+app/static/audio/sentences/[0-9][0-9][0-9][0-9].mp3
 
 # OS
 .DS_Store
