@@ -38,31 +38,43 @@ A fourth tab, **Custom**, lets you push a sentence into the deck without editing
 
 ## Run it on your machine
 
-Requires Python 3.10 or newer. Flask is installed from `requirements.txt`, everything else is in the standard library.
+Requires Python 3.10 or newer. Flask is installed automatically into a local virtual environment on first run.
 
-### macOS and Linux
+### One command, any OS
 
 ```bash
 git clone https://github.com/<your-user>/dutch-srs-training.git
 cd dutch-srs-training
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-./dutch web
+python3 run.py
 ```
 
-### Windows (PowerShell)
+On Windows, `python run.py` instead of `python3 run.py`. The script detects the OS, creates a `.venv` in the project directory, installs Flask into it, then launches the web UI. Subsequent runs skip the install and start in under a second.
+
+The first launch seeds the SQLite database from `data/words.csv` and `app/seed_data.py`, so there is no separate setup step. Your browser opens to `http://localhost:5051`.
+
+To pass arguments to the CLI, append them after `run.py`:
+
+```bash
+python3 run.py web --new 30        # raise the new-card cap for one session
+python3 run.py stats               # print deck stats
+python3 run.py review              # terminal review mode
+```
+
+### Manual setup, if you prefer
+
+The project also ships shell-specific launchers if you do not want to use `run.py`:
+
+macOS or Linux:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && ./dutch web
+```
+
+Windows (PowerShell):
 
 ```powershell
-git clone https://github.com/<your-user>/dutch-srs-training.git
-cd dutch-srs-training
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-.\dutch.cmd web
+python -m venv .venv ; .\.venv\Scripts\Activate.ps1 ; pip install -r requirements.txt ; .\dutch.cmd web
 ```
-
-The first run on any machine seeds the SQLite database from `data/words.csv` and `app/seed_data.py`, so you do not need a separate setup step. Your browser will open to `http://localhost:5051`.
 
 A useful shell alias on macOS or Linux, drop this in `~/.zshrc` or `~/.bashrc` and you can run `dutch web` from any directory:
 
