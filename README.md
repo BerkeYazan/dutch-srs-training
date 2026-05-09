@@ -4,7 +4,7 @@ A small, local-first spaced repetition app for learning Dutch from the top 1000 
 
 It runs as a Flask web app on `http://localhost:5051`. There is also a terminal review mode if you prefer keys to clicks. Your review history lives in a single SQLite file under your OS user-data folder, so the project tree stays clean and survives a `git pull -f` without losing progress.
 
-I built this for myself because Anki's deck library skews encyclopedic and Duolingo skews gamified, and neither cleanly matched the corpus I actually wanted to drill: the words you bump into in real Dutch conversation, ranked by frequency, each anchored to a single canonical sentence with sense labels for polysemes. If you are a friend cloning this, the goal is not to convert you to my workflow, it is to give you a deck that already works on day one and stays out of your way.
+I built this for myself because Anki's deck library is too broad and Duolingo is too gamified for what I needed, the top 1000 lemmas of conversational Dutch ranked by frequency, each anchored to one canonical sentence, with sense labels for polysemes. If you are cloning this, you get a deck that works on day one.
 
 ## What it does
 
@@ -14,17 +14,15 @@ Three views, all in the same single-page UI:
 
 1. **New words.** Standard SRS. Due cards first, then up to N new from the frequency-ranked queue. SM-2 with 1 minute and 10 minute learning steps, 1 day graduating interval, ease floor 1.3, max interval 5 years, defaults that match Anki.
 
-2. **Sentence forming.** Production drill. You see the English, attempt the Dutch in your head, press space to reveal. Then six pills appear, one per variation axis (past, future, statement, question, verb-swap, noun-swap, person-swap). Two of the six are tense alternatives picked from the original's tense, the rest are lexical or form-level variations. Click a pill, get the slightly-shifted English, attempt the Dutch again. The point is generalization, not memorization of a single phrase.
+2. **Sentence forming.** Production drill. You see the English, attempt the Dutch in your head, press space to reveal. Then six pills appear, one per variation axis (past, future, statement, question, verb-swap, noun-swap, person-swap). Two of the six are tense alternatives picked from the original's tense, the rest are lexical or form-level variations. Click a pill, get the slightly-shifted English, attempt the Dutch again. This is for generalization, not single-phrase memorization.
 
 3. **Word order.** Drag-and-drop drill on Dutch syntax. The Dutch sentence is rearranged into English word order (the literal gloss). You drag the tokens back into the canonical Dutch arrangement and press Check. Pass locks the row green. Fail surfaces a one-line structural hint (V2 inversion, subordinate verb final) and marks the misplaced tokens.
 
 A fourth tab, **Custom**, lets you push a sentence into the deck without editing source. Useful when you hear something in the wild and want it as a card immediately.
 
-## Principles, the boring half
+## Principles
 
-These are the rules I wrote the code against. Worth knowing before you change anything.
-
-**Local-first, no account, no telemetry.** The whole app runs against a SQLite file on your machine. There is no signup, no sync server, no analytics. The price is that progress does not roam between devices automatically. If you want it to roam, point `DUTCH_SRS_DB` at a path inside a synced folder that handles SQLite well (Syncthing, a private git-annex repo). iCloud and Dropbox can corrupt SQLite WAL files, do not point the DB there.
+**Local-first, no account, no telemetry.** The whole app runs against a SQLite file on your machine. There is no signup, no sync server, no analytics. Progress does not roam between devices automatically. If you want it to roam, point `DUTCH_SRS_DB` at a path inside a synced folder that handles SQLite well (Syncthing, a private git-annex repo). iCloud and Dropbox can corrupt SQLite WAL files, do not point the DB there.
 
 **Frequency, not curriculum.** The deck is the top 1000 lemmas from Hermit Dave's OpenSubtitles list, lemmatized via spaCy so that `ben`, `is`, `was`, `zijn`, `geweest` collapse onto the lemma `zijn`. Subtitles approximate spoken register, which is what an A1-A2 learner meets in conversation. Ranks 1 to 200 ship with full sentences and audio. Ranks 201 to 1000 sit dormant in `data/words.csv` until sentences are written for them.
 
@@ -36,11 +34,11 @@ These are the rules I wrote the code against. Worth knowing before you change an
 
 **Append-only logs, no rewrites.** Confusion notes, vocab logs, daily summaries: every writer in `vault.py` only appends. The chronological history of where you got stuck stays intact, so an LLM can later look at it and explain what was confusing without first reconstructing a timeline.
 
-**Loud failures over silent fallbacks.** A missing literal gloss makes the sentence skip the Word order queue, it does not auto-generate a fake one. A missing audio file makes the play button hide, it does not silently fall back to browser TTS. If you see a button, the data behind it exists.
+**Loud failures over silent fallbacks.** A missing literal gloss makes the sentence skip the Word order queue, it does not auto-generate a fake one. A missing audio file makes the play button hide, it does not silently fall back to browser TTS.
 
 ## Run it on your machine
 
-You need Python 3.10 or newer. That is the only hard requirement. Flask gets installed from `requirements.txt`, everything else is in the standard library.
+Requires Python 3.10 or newer. Flask is installed from `requirements.txt`, everything else is in the standard library.
 
 ### macOS and Linux
 
@@ -72,7 +70,7 @@ A useful shell alias on macOS or Linux, drop this in `~/.zshrc` or `~/.bashrc` a
 alias dutch='cd ~/path/to/dutch-srs-training && source .venv/bin/activate && ./dutch'
 ```
 
-### What you can do without reading further
+### Common commands
 
 - `./dutch web` opens the web UI with default 20 new cards per session.
 - `./dutch web --new 30` raises the cap for one session.
@@ -120,7 +118,7 @@ dutch-srs-training/
 
 Two locations, on purpose.
 
-**Code, content, and audio live inside the repo.** `seed_data.py` is the canonical source for words, sentences, glosses, and variations. `data/words.csv` is the frequency-ranked catalog. `app/static/audio/` holds the MP3s. All of this is text, plus a few megabytes of MP3, all of it under version control.
+**Code, content, and audio live inside the repo.** `seed_data.py` is the canonical source for words, sentences, glosses, and variations. `data/words.csv` is the frequency-ranked catalog. `app/static/audio/` holds the MP3s. All under version control.
 
 **Your review history lives outside the repo.** SQLite at one of these paths, depending on your OS:
 
@@ -130,9 +128,9 @@ Two locations, on purpose.
 
 Override with `DUTCH_SRS_DB=/some/path/srs.db` if you want it elsewhere.
 
-This split is the most important design decision in the project. The repo is a deck definition, immutable in the sense that everyone running this code starts from the same words and sentences. Your SQLite file is the only thing that changes as you study. You can blow away the repo, clone a fresh one, and your progress is still there. You can update the seed (new words, fixed glosses, more sentences) and your existing reviews stay intact, the migration in `db.init_db` is forward-only and additive.
+The split exists so the repo can be a fixed deck definition while your SQLite file is the only thing that changes as you study. You can delete the repo, clone a fresh one, and your progress is still there. You can update the seed (new words, fixed glosses, more sentences) and your existing reviews stay intact, the migration in `db.init_db` is forward-only and additive.
 
-The SQLite schema, in plain English:
+The SQLite schema:
 
 | Table | What it holds |
 | --- | --- |
@@ -148,7 +146,7 @@ Migrations are forward-only column adds inside `db.init_db`. There is no migrati
 
 ## Optional integrations
 
-**External markdown vault.** Set `DUTCH_SRS_VAULT=/path/to/notes` and the app will append three things to that folder: a row to `Vocab/Vocab Log.md` for every new word you graduate, a one-line summary to `Daily/YYYY-MM-DD.md` if today's daily note exists, and confusion notes you write in the UI to `SRS/Feedback Log.md`. Without this var, none of these writers run, and the API endpoints stay functional. I use this to integrate with my Obsidian vault, your mileage may vary, the file layout is documented in `app/vault.py`.
+**External markdown vault.** Set `DUTCH_SRS_VAULT=/path/to/notes` and the app will append three things to that folder: a row to `Vocab/Vocab Log.md` for every new word you graduate, a one-line summary to `Daily/YYYY-MM-DD.md` if today's daily note exists, and confusion notes you write in the UI to `SRS/Feedback Log.md`. Without this var, none of these writers run, and the API endpoints stay functional. I use this to integrate with my Obsidian vault. The file layout is documented in `app/vault.py`.
 
 **Audio.** The repo ships per-lemma MP3s and per-sentence MP3s, all keyed by stable identifiers (lemma string for words, sha1(dutch_text)[:16] for sentences). Both work on first run, no Google Cloud key required.
 
@@ -168,9 +166,7 @@ The script is idempotent, it skips items that already have an MP3 unless you pas
 
 ## How to extend the deck
 
-You will mostly want to author new sentences, that is the bottleneck.
-
-Open `app/seed_data.py`. Each entry looks like this:
+The bottleneck is writing new sentences. Open `app/seed_data.py`. Each entry looks like this:
 
 ```python
 'fiets': {
@@ -206,8 +202,6 @@ For a one-off card without editing source, use `./dutch add` or the Custom tab i
 
 ## How to verify a change
 
-I keep this short on purpose, the suite is small.
-
 ```bash
 python3 app/test_srs.py                             # algorithm unit tests
 ./dutch stats                                       # smoke test
@@ -215,19 +209,19 @@ python3 app/test_srs.py                             # algorithm unit tests
 ./dutch web                                         # eyeball the three views
 ```
 
-If you change `srs.py`, run the unit tests. If you change the schema, delete your local DB and reseed (the auto-seed on first run will rebuild it). If you change the frontend, hard-reload, the static cache is disabled in `web.py` for exactly this reason.
+If you change `srs.py`, run the unit tests. If you change the schema, delete your local DB and reseed (the auto-seed on first run will rebuild it). If you change the frontend, hard-reload. The static cache is disabled in `web.py`.
 
 ## What this project is not
 
-It is not a Duolingo replacement. There are no streaks, no XP, no mascots. There is no leaderboard.
+Not a Duolingo replacement. No streaks, XP, mascots, or leaderboards.
 
-It is not a course. It does not teach grammar. It assumes you have grammar reference materials elsewhere and uses sentences to drill the words those grammar rules act on.
+Not a course. It does not teach grammar. It assumes you have grammar reference materials elsewhere and uses sentences to drill the words those rules act on.
 
-It is not multi-user. The Flask server is a single-process, single-user development server. Do not deploy it on the public internet, there is no auth.
+Not multi-user. The Flask server is a single-process, single-user development server. Do not deploy it on the public internet, there is no auth.
 
-## Asking for help, contributing, reporting bugs
+## Help, contributing, bugs
 
-Open an issue on GitHub. For changes, see [CONTRIBUTING.md](CONTRIBUTING.md). For the longer-running maintenance plan and how the deck grows over time, see [MAINTENANCE.md](MAINTENANCE.md). If you are an LLM working in this codebase on someone else's behalf, [AGENTS.md](AGENTS.md) is the file to read first.
+Open an issue on GitHub. For changes, see [CONTRIBUTING.md](CONTRIBUTING.md). For the maintenance plan and how the deck grows over time, see [MAINTENANCE.md](MAINTENANCE.md). LLMs working in this codebase should read [AGENTS.md](AGENTS.md) first.
 
 ## License
 
