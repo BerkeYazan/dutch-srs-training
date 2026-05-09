@@ -499,49 +499,56 @@ kbd {
 
 /* Bilingual empty state for production drills. Dutch headline carries the
    primary visual weight, the English line below sits muted as a translation
-   the eye picks up automatically. The body block uses the same pairing so
-   the user always sees both, never has to guess what the Dutch said. */
+   the eye picks up automatically. The container vertically centers within
+   whatever the parent view height is, with a small upward bias so the
+   message lands above the optical center, where the eye expects a title
+   rather than the dead center of the viewport. */
 .empty-state {
     text-align: center;
-    margin-top: 22vh;
     padding: 0 24px;
     color: var(--text);
+    min-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
 }
 .empty-state .headline {
     font-family: var(--serif);
     font-weight: 500;
-    font-size: 30px;
+    font-size: 34px;
     letter-spacing: -0.015em;
-    line-height: 1.2;
-    margin: 0 0 6px 0;
+    line-height: 1.15;
+    margin: 0;
     color: var(--text);
 }
 .empty-state .headline-en {
     font-family: var(--sans);
     font-weight: 400;
-    font-size: 14px;
-    letter-spacing: 0.04em;
+    font-size: 13px;
+    letter-spacing: 0.06em;
     text-transform: lowercase;
     color: var(--muted);
-    margin: 0 0 28px 0;
+    margin: -10px 0 6px 0;
 }
 .empty-state .body {
-    max-width: 440px;
+    max-width: 460px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
 }
 .empty-state .body-nl {
     font-family: var(--serif);
-    font-size: 17px;
+    font-size: 16px;
     line-height: 1.5;
     color: var(--text);
     margin: 0;
 }
 .empty-state .body-en {
     font-family: var(--sans);
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1.5;
     color: var(--muted);
     margin: 0;
@@ -3548,11 +3555,10 @@ async function loadStreak() {
 function renderStreak(card, data) {
     const days = Array.isArray(data.days) ? data.days : [];
     const total = data.total_reviews | 0;
-    if (total === 0 || days.length === 0) {
-        card.hidden = true;
-        card.innerHTML = "";
-        return;
-    }
+    // The widget renders even with zero reviews so the History view always
+    // shows a frame the user can grow into. An empty grid with the same
+    // legend is a calmer first impression than a hidden panel that suddenly
+    // appears once the first review lands.
     card.hidden = false;
     card.classList.remove("empty");
 
@@ -3567,7 +3573,10 @@ function renderStreak(card, data) {
         return 4;
     };
 
-    const today = data.today;
+    // data.today should always be present, the API computes it from the
+    // configured timezone. Fall back to local today to keep the grid
+    // alignment stable if a future API change drops the field.
+    const today = data.today || (new Date()).toISOString().slice(0, 10);
     const todayDate = new Date(today + "T00:00:00");
     const ymd = (d) => {
         const y = d.getFullYear();
@@ -3583,7 +3592,21 @@ function renderStreak(card, data) {
     // reads them as inert. The grid now extends past today because
     // the backend window includes a two-week future buffer, giving
     // the user a calm "what's next" preview frame around the active
-    // portion of the heatmap.
+    // portion of the heatmap. When the API returns no days at all
+    // (zero lifetime reviews), synthesize a 12-week window ending
+    // two weeks from today so the empty grid still has a fixed
+    // shape rather than collapsing.
+    if (days.length === 0) {
+        const synth = [];
+        const start = new Date(todayDate);
+        start.setDate(todayDate.getDate() - 70);
+        const end = new Date(todayDate);
+        end.setDate(todayDate.getDate() + 14);
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            synth.push({ date: ymd(d), count: 0, grades: { 1:0, 2:0, 3:0, 4:0 } });
+        }
+        days.push(...synth);
+    }
     const first = new Date(days[0].date + "T00:00:00");
     const last = new Date(days[days.length - 1].date + "T00:00:00");
     const firstDow = (first.getDay() + 6) % 7;

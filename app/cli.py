@@ -148,24 +148,36 @@ def _link_existing_audio(conn) -> tuple[int, int]:
     # 16 hex chars: collision risk on a few thousand short sentences is
     # cosmologically small. See scripts/migrate_sentence_audio.py for the
     # one-shot rename that brought the existing files onto this scheme.
+    #
+    # The relink also self-heals: a row whose audio_path points at a
+    # missing file gets its column cleared, so the play button hides
+    # rather than 404-ing. This matters when an old DB lingers from a
+    # previous code version and its paths are stale.
     linked_sents = 0
     if sents_dir.exists():
-        rows = conn.execute("SELECT id, dutch FROM sentences").fetchall()
+        rows = conn.execute("SELECT id, dutch, audio_path FROM sentences").fetchall()
         for row in rows:
             h = sentence_audio_hash(row["dutch"])
             mp3 = sents_dir / f"{h}.mp3"
-            if not mp3.exists():
+            if mp3.exists():
+                rel = f"audio/sentences/{mp3.name}"
+                if row["audio_path"] != rel:
+                    conn.execute(
+                        "UPDATE sentences SET audio_path = ? WHERE id = ?",
+                        (rel, row["id"]),
+                    )
+                    linked_sents += 1
                 continue
-            rel = f"audio/sentences/{mp3.name}"
-            cur = conn.execute(
-                "SELECT audio_path FROM sentences WHERE id = ?", (row["id"],)
-            ).fetchone()
-            if cur and cur["audio_path"] == rel:
-                continue
-            conn.execute(
-                "UPDATE sentences SET audio_path = ? WHERE id = ?", (rel, row["id"])
-            )
-            linked_sents += 1
+            # No matching file. If the row claims an audio_path, sanity-check
+            # it. If that file does not exist either, clear the column.
+            current = row["audio_path"]
+            if current:
+                stale = static / current
+                if not stale.exists():
+                    conn.execute(
+                        "UPDATE sentences SET audio_path = NULL WHERE id = ?",
+                        (row["id"],),
+                    )
 
     conn.commit()
     return linked_words, linked_sents
@@ -419,6 +431,14 @@ def cmd_web(args: argparse.Namespace) -> None:
     report = db.sync_glosses_from_seed(fresh_conn, SEED)
     if report["updated"]:
         print(f"synced {report['updated']} literal_gloss value(s) from seed_data.py")
+
+    # Always relink audio on web boot. New audio files added since the
+    # last seed get picked up automatically, and rows whose audio_path
+    # points at a stale or missing file get repaired without a manual
+    # reseed. Cheap, runs in milliseconds.
+    linked_words, linked_sents = _link_existing_audio(fresh_conn)
+    if linked_words or linked_sents:
+        print(f"linked existing audio: {linked_words} word clip(s), {linked_sents} sentence clip(s)")
 
     import web as web_app  # imported lazily so the CLI can run without flask
 
