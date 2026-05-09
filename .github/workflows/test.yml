@@ -1,0 +1,29 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  algo:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: install runtime deps
+        run: pip install -r requirements.txt
+      - name: run algorithm tests
+        run: python3 app/test_srs.py
+      - name: smoke test seed and stats against an empty DB
+        env:
+          DUTCH_SRS_DB: /tmp/ci-srs.db
+        run: |
+          ./dutch seed
+          ./dutch stats

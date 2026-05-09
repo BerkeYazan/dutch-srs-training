@@ -1,0 +1,16 @@
+# Optional tools used to extend the deck. Not needed to run the app.
+#
+# build_wordlist.py uses spaCy's nl_core_news_sm model to lemmatize the raw
+# OpenSubtitles frequency dump. Only needed if you want to regenerate
+# data/words.csv from a fresh frequency list.
+spacy>=3.7
+# After installing spacy, also run:
+#   python -m spacy download nl_core_news_sm
+
+# tts_audio.py renders MP3s with Google Cloud Text-to-Speech. Only needed if
+# you want to extend the audio set beyond what ships in app/static/audio.
+google-cloud-texttospeech>=2.16
+
+# Test runner used by test_srs.py. Plain unittest works too, pytest is
+# optional, kept here for the contributor flow.
+pytest>=7

@@ -1,0 +1,6 @@
+# Runtime requirements for the Dutch SRS web UI and CLI.
+# Pin to a known-good major to keep first-run installs predictable.
+# The build_wordlist and tts_audio scripts have their own optional deps,
+# documented in requirements-dev.txt.
+
+flask>=3.0,<4.0
