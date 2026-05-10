@@ -2284,7 +2284,7 @@ body.is-fullscreen nav.menu button.menu-action .icon.exit { display: block; }
                 </button>
                 <button id="sf-key-s" class="key-item" type="button">
                     <kbd>s</kbd>
-                    <span class="lbl">skip</span>
+                    <span class="lbl" id="sf-key-s-lbl">skip</span>
                 </button>
                 <button id="sf-key-1" class="key-item hidden" type="button">
                     <kbd>1</kbd>
@@ -4335,14 +4335,17 @@ function renderSf() {
 // Toggle the Sentence Forming key-row to match the drill state.
 //   'hidden'   no card on screen, hide the entire footer
 //   'before'   user has not revealed the original Dutch yet, space
-//              triggers reveal, s skips to the next sentence
+//              triggers reveal, s skips to the next sentence outright
 //   'after'    original revealed (and optionally walking variations),
 //              space advances (next variation or next sentence at
-//              terminal), 1 requeues the current sentence to the end
+//              terminal), s skips the remaining variations and jumps
+//              to the next sentence (label, "got it, skip rest"), 1
+//              requeues the current sentence to the end
 function setSfKeyRow(state) {
     const footer = document.getElementById("sf-footer");
     const spaceLbl = document.getElementById("sf-key-space-lbl");
     const sBtn = document.getElementById("sf-key-s");
+    const sLbl = document.getElementById("sf-key-s-lbl");
     const oneBtn = document.getElementById("sf-key-1");
     if (!footer) return;
     if (state === "hidden") {
@@ -4353,10 +4356,18 @@ function setSfKeyRow(state) {
     if (state === "before") {
         spaceLbl.textContent = "reveal Dutch";
         sBtn.classList.remove("hidden");
+        sLbl.textContent = "skip";
         oneBtn.classList.add("hidden");
     } else if (state === "after") {
         spaceLbl.textContent = "next";
-        sBtn.classList.add("hidden");
+        // Keep s visible after reveal so the user can bail on the
+        // remaining variations once they feel they have got the
+        // structure. The keyboard handler already calls sfNext from
+        // any state, the visible chip just makes that affordance
+        // discoverable in the after state too. No SRS scoring is
+        // touched, Sentence Forming is a free practice loop.
+        sBtn.classList.remove("hidden");
+        sLbl.textContent = "got it, skip rest";
         oneBtn.classList.remove("hidden");
     }
 }

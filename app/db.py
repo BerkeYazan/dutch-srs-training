@@ -588,13 +588,17 @@ def eligible_sentences_for_drill(
         not joined here, the Sentence forming endpoint fetches them per
         sentence so the Word order endpoint does not pay the cost.
     """
+    # word_added_on (from words.added_on) is included so the queue endpoints
+    # can apply a recency boost to sentences whose headword entered the deck
+    # recently. Without this term the sample is dominated by the long-learned
+    # core and freshly-added words rarely come up. See web._recency_boost.
     base = (
         """
         SELECT s.id AS sentence_id, s.word_id, s.dutch, s.english, s.sense,
                s.tense, s.form, s.level, s.literal_gloss,
                s.audio_path AS sentence_audio_path,
                w.lemma, w.article, w.pos, w.english AS word_english,
-               w.audio_path AS word_audio_path,
+               w.audio_path AS word_audio_path, w.added_on AS word_added_on,
                r.state, r.lapses, r.ease
         FROM sentences s
         JOIN words w   ON w.id = s.word_id

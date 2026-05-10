@@ -19,7 +19,7 @@ design.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -434,6 +434,49 @@ def _difficulty_weight(state: str, lapses: int, ease: float, *, extra: float = 0
     return w
 
 
+def _recency_boost(word_added_on: str | None, *, today: date | None = None) -> float:
+    """Return a soft sampling boost favoring recently-added headwords.
+
+    Sentence forming and Word order otherwise tend to keep resurfacing the
+    same long-learned sentences while newly added words rarely come up. The
+    fix is a recency term that adds weight to the sampling key when the
+    sentence's headword (words.added_on) is recent. Older words get less
+    boost, which lets the existing difficulty term (lapses and ease) take
+    over for the long-tail.
+
+    Schedule. Linear decay from RECENCY_K at day 0 to zero at day
+    RECENCY_HALFLIFE. After that, no recency contribution. The decay is
+    intentionally short, the goal is to surface the last few weeks of
+    growth, not to rewrite the schedule. Tweak the constants if the bias
+    feels too strong or too weak in practice.
+
+    Args:
+        word_added_on: ISO date string from words.added_on, or None.
+        today:         override for testing, defaults to date.today().
+
+    Returns:
+        A non-negative float, ready to fold into _difficulty_weight via
+        the `extra` parameter.
+    """
+    if not word_added_on:
+        return 0.0
+    RECENCY_K = 4.0
+    RECENCY_HALFLIFE = 30  # days
+    try:
+        added = date.fromisoformat(word_added_on[:10])
+    except ValueError:
+        return 0.0
+    today = today or date.today()
+    age_days = (today - added).days
+    if age_days < 0:
+        # Future-dated added_on, treat as today rather than negative age.
+        age_days = 0
+    if age_days >= RECENCY_HALFLIFE:
+        return 0.0
+    # Linear decay, RECENCY_K at age 0 down to zero at the half-life.
+    return RECENCY_K * (1.0 - age_days / RECENCY_HALFLIFE)
+
+
 def _weighted_sample(items: list[dict], weights: list[float], count: int) -> list[dict]:
     """Efraimidis-Spirakis A-Res weighted sample without replacement.
 
@@ -502,7 +545,12 @@ def api_sentence_forming_queue():
         state = r["state"]
         lapses = int(r["lapses"] or 0)
         ease = float(r["ease"] or 2.5)
-        w = _difficulty_weight(state, lapses, ease)
+        # Recency bias, surfaces sentences whose headword was added in the
+        # last RECENCY_HALFLIFE days. Without this, the sample is dominated
+        # by the long-learned core and newly-introduced words rarely show
+        # up. See _recency_boost for the schedule.
+        rec = _recency_boost(r["word_added_on"])
+        w = _difficulty_weight(state, lapses, ease, extra=rec)
         weights.append(w)
         items.append({
             "sentence_id": sent_id,
@@ -521,6 +569,7 @@ def api_sentence_forming_queue():
             "state": state,
             "lapses": lapses,
             "ease": round(ease, 3),
+            "recency_boost": round(rec, 3),
             "difficulty_weight": round(w, 3),
             "variations": db.fetch_variations(conn, sent_id),
         })
@@ -620,7 +669,12 @@ def api_word_order_queue():
         ease = float(r["ease"] or 2.5)
         # Failures bias the same sentence to come back sooner. Soft, capped.
         fail_boost = 1.5 * min(int(fail_counts.get(sent_id, 0)), 4)
-        w = _difficulty_weight(state, lapses, ease, extra=fail_boost)
+        # Recency bias on the headword's added_on, same idea as Sentence
+        # forming. Newly-added words come up more often so the drill
+        # surfaces what is actually in flight, not just the long-learned
+        # core. See _recency_boost.
+        rec = _recency_boost(r["word_added_on"])
+        w = _difficulty_weight(state, lapses, ease, extra=fail_boost + rec)
         weights.append(w)
         items.append({
             "sentence_id": sent_id,
@@ -641,6 +695,7 @@ def api_word_order_queue():
             "level": r["level"],
             "state": state,
             "fail_count": int(fail_counts.get(sent_id, 0)),
+            "recency_boost": round(rec, 3),
             "difficulty_weight": round(w, 3),
         })
 
@@ -768,8 +823,14 @@ def api_feedback():
     clicked on, their free-text note, and a timestamp, then appends to the
     markdown log under DUTCH_SRS_VAULT/SRS/Feedback Log.md. No automatic
     explanation is produced, that is reserved for follow-up sessions where
-    the user points an LLM at the entry. When DUTCH_SRS_VAULT is unset the
-    note is accepted by the API but not persisted to disk.
+    the user points an LLM at the entry.
+
+    Persistence guarantee. If DUTCH_SRS_VAULT is unset, or points at a
+    path that does not resolve to a writable Feedback Log, this endpoint
+    returns 503 rather than 200. The previous behavior accepted the note
+    and silently discarded it, which caused real data loss. Better to
+    refuse the click and surface a clear error than to look successful
+    and lose the note.
 
     Body:
         {
@@ -792,13 +853,34 @@ def api_feedback():
     if not lemma or not dutch or not note:
         return jsonify({"error": "lemma, dutch, and note are required"}), 400
 
-    res = append_to_feedback_log(
-        lemma=lemma,
-        dutch=dutch,
-        english=english,
-        note=note,
-        source=source,
-    )
+    # The writer raises RuntimeError if its post-write verification fails,
+    # for example if the markdown file did not actually receive the bytes.
+    # We translate that into a 500 so the UI shows a real error rather than
+    # an optimistic 200. OSError covers permission and IO problems.
+    try:
+        res = append_to_feedback_log(
+            lemma=lemma,
+            dutch=dutch,
+            english=english,
+            note=note,
+            source=source,
+        )
+    except RuntimeError as exc:
+        return jsonify({"error": f"server could not save the note: {exc}"}), 500
+    except OSError as exc:
+        return jsonify({"error": f"file system error while saving note: {exc}"}), 500
+    # res["path"] is None when DUTCH_SRS_VAULT is unset or the resolved
+    # vault root does not exist. The writer in vault.py is a no-op in that
+    # case. Translate this to a 503 so the UI can show a real error and
+    # prompt the user to configure their vault before clicking save again.
+    if res.get("path") is None:
+        return jsonify({
+            "error": (
+                "vault not configured, set the DUTCH_SRS_VAULT environment "
+                "variable to your vault folder and restart the server, "
+                "otherwise notes cannot be saved"
+            ),
+        }), 503
     return jsonify({"ok": True, "stamp": res["stamp"], "path": res["path"]})
 
 

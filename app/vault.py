@@ -261,4 +261,24 @@ def append_to_feedback_log(
     text = text.rstrip() + entry
     feedback_log.write_text(text)
 
+    # Post-write verification. The previous silent-no-op bug taught us not
+    # to trust that write_text actually persisted bytes to disk under all
+    # filesystem conditions. We read the file back and confirm the entry
+    # signature is present. The signature is the timestamp lemma source
+    # triple, unique per entry. If the read-back fails, raise so the API
+    # can return a 500 instead of an optimistic 200.
+    verify_signature = f"### {stamp}, lemma `{lemma}`, source: {source}"
+    try:
+        readback = feedback_log.read_text()
+    except OSError as exc:
+        raise RuntimeError(
+            f"feedback write verification failed, could not read back "
+            f"{feedback_log}: {exc}"
+        ) from exc
+    if verify_signature not in readback:
+        raise RuntimeError(
+            f"feedback write verification failed, entry not found in "
+            f"{feedback_log} after write. signature={verify_signature!r}"
+        )
+
     return {"path": str(feedback_log), "stamp": stamp, "entry": entry}
