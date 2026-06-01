@@ -405,6 +405,7 @@ def undo_last_review(conn: sqlite3.Connection) -> dict | None:
     return {
         "word_id": int(row["word_id"]),
         "was_new": row["prev_state"] == "new",
+        "prev_state": row["prev_state"],
         "grade": int(row["grade"]),
         "reviewed_at": row["reviewed_at"],
     }
@@ -424,22 +425,55 @@ def history_count(conn: sqlite3.Connection, since: str | None = None) -> int:
     )
 
 
-def due_word_ids(conn: sqlite3.Connection, now: datetime, limit: int) -> list[int]:
+def due_word_ids(
+    conn: sqlite3.Connection,
+    now: datetime,
+    limit: int,
+    states: tuple[str, ...] = ("learning", "review", "relearning"),
+) -> list[int]:
     """Return word ids whose review is due, oldest-due first.
 
-    Excludes 'new' state, those are pulled separately to enforce a daily cap.
+    Excludes 'new' state by default, those are pulled separately to enforce a
+    daily cap. The `states` filter lets the web queue request a subset, eg
+    only ('learning', 'relearning') for the always-on short steps or only
+    ('review',) for the daily-capped stream. See web.api_next.
     """
+    placeholders = ",".join("?" for _ in states)
     cur = conn.execute(
-        """
+        f"""
         SELECT word_id FROM reviews
-        WHERE state IN ('learning', 'review', 'relearning')
+        WHERE state IN ({placeholders})
           AND due_at <= ?
         ORDER BY due_at ASC
         LIMIT ?
         """,
-        (iso(now), limit),
+        (*states, iso(now), limit),
     )
     return [int(r["word_id"]) for r in cur.fetchall()]
+
+
+def due_count(
+    conn: sqlite3.Connection,
+    now: datetime,
+    states: tuple[str, ...] = ("review",),
+) -> int:
+    """Count cards due now in the given states. Used to size the daily queue
+    without materializing the full id list when only the total matters.
+    """
+    placeholders = ",".join("?" for _ in states)
+    return int(
+        conn.execute(
+            f"SELECT COUNT(*) c FROM reviews WHERE state IN ({placeholders}) AND due_at <= ?",
+            (*states, iso(now)),
+        ).fetchone()["c"]
+    )
+
+
+def count_new(conn: sqlite3.Connection) -> int:
+    """Count words still in the 'new' state, ie the size of the new pool."""
+    return int(
+        conn.execute("SELECT COUNT(*) c FROM reviews WHERE state = 'new'").fetchone()["c"]
+    )
 
 
 def new_word_ids(conn: sqlite3.Connection, limit: int) -> list[int]:

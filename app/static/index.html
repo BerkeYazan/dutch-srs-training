@@ -2007,6 +2007,48 @@ nav.menu button.active {
     letter-spacing: 0.02em;
 }
 
+/* NEW / REVIEW indicator on the Daily Words tab. A small colored chip says
+   whether the current card is a new word or one from the past, and the
+   matching number in the done / new-left / past-left tuple is bolded and
+   tinted the same hue so the eye lands on the count that is moving. Green
+   reads as new growth, blue as the review backlog, matching the card badge. */
+.kind-chip {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 999px;
+    margin-right: 7px;
+    line-height: 1.5;
+}
+.kind-chip.k-new { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
+.kind-chip.k-review { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.menu-count .ct .n.hot,
+.menu-trigger-count .ct .n.hot { font-weight: 700; }
+.menu-count.k-new .n.hot,
+.menu-trigger-count.k-new .n.hot { color: var(--good); }
+.menu-count.k-review .n.hot,
+.menu-trigger-count.k-review .n.hot { color: var(--accent); }
+
+/* Status pill on the card itself, echoing the tab chip. Floats to the right
+   edge of the lemma row (margin-left:auto against the flex row) and centers
+   against the big serif lemma rather than sitting on its baseline. */
+.card-kind-badge {
+    margin-left: auto;
+    align-self: center;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.card-kind-badge.k-new { color: var(--good); background: color-mix(in srgb, var(--good) 13%, transparent); }
+.card-kind-badge.k-review { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+
 /* Fullscreen mode keeps the title trigger visible so the user can
    still see which mode they are in and switch tabs without leaving
    fullscreen. The dropdown's open/close state is driven by .hidden
@@ -2465,6 +2507,10 @@ body.is-fullscreen nav.menu button.menu-action .icon.exit { display: block; }
 
 <script>
 const NEW_CAP = parseInt(new URLSearchParams(location.search).get("new") || "20", 10);
+// Daily review (repeat) cap, mirrors NEW_CAP. Sent to /api/next as the
+// `review` param so the server bounds how many overdue reviews surface per
+// day instead of walling the new words behind the whole backlog.
+const REVIEW_CAP = parseInt(new URLSearchParams(location.search).get("review") || "50", 10);
 
 // Per-tab progress tracker. refreshMenuLabels reads this and rewrites
 // the nav button text, so each tab announces how far the user is into
@@ -2482,8 +2528,12 @@ const MENU_BASE = {
     history: "Progress",
     custom: "Add Custom Words",
 };
+// menuStats.new.kind tracks whether the card currently in front of the user
+// is a 'new' word or one 'from the past' (review/learning/relearning). It
+// drives the colored NEW/REVIEW chip on the Daily Words tab and which of the
+// two counts is highlighted. null means no card in view (boot, done state).
 const menuStats = {
-    new: { done: 0, newLeft: NEW_CAP, dueAhead: 0 },
+    new: { done: 0, newLeft: NEW_CAP, dueAhead: 0, kind: null },
     forming: { x: 0, y: 0 },
     wo: { x: 0, y: 0 },
 };
@@ -2819,6 +2869,56 @@ async function prefetchStreakForMenu() {
     } catch (e) { /* network glitch, leave the cached strip alone */ }
 }
 
+// Map a card kind to its tab-chip label and class. The tab only needs the
+// binary "new vs from the past" distinction the user asked for, so review,
+// learning, and relearning all collapse to one REVIEW chip. null (no card in
+// view) yields no chip.
+function kindChipMeta(kind) {
+    if (kind === "new") return { label: "NEW", cls: "k-new" };
+    if (kind === "review" || kind === "learning" || kind === "relearning") {
+        return { label: "REVIEW", cls: "k-review" };
+    }
+    return null;
+}
+
+// Build the Daily Words count display: a NEW/REVIEW chip followed by the
+// done / new-left / past-left tuple, with the side matching the current card
+// highlighted (.hot). When a new word is up, the middle (new-left) number is
+// hot; for any review/learning/relearning card the right (past-left) number
+// is hot. forTrigger swaps the wrapper class so the always-visible active-tab
+// header and the dropdown row share one builder.
+function buildDailyCountEls(s, forTrigger) {
+    const wrap = document.createElement("span");
+    wrap.className = forTrigger ? "menu-trigger-count" : "menu-count";
+    const chip = kindChipMeta(s.kind);
+    if (chip) {
+        // Tag the wrapper with the kind so CSS can tint the highlighted
+        // number to match the chip (green for new, blue for review).
+        wrap.classList.add(chip.cls);
+        const ch = document.createElement("span");
+        ch.className = "kind-chip " + chip.cls;
+        ch.textContent = chip.label;
+        wrap.append(ch);
+    }
+    const isNew = s.kind === "new";
+    const hasCard = s.kind != null;
+    const mk = (val, hot) => {
+        const n = document.createElement("span");
+        n.className = hot ? "n hot" : "n";
+        n.textContent = String(val);
+        return n;
+    };
+    const tuple = document.createElement("span");
+    tuple.className = "ct";
+    tuple.append(mk(s.done, false));
+    tuple.append(document.createTextNode("/"));
+    tuple.append(mk(s.newLeft, hasCard && isNew));
+    tuple.append(document.createTextNode("/"));
+    tuple.append(mk(s.dueAhead, hasCard && !isNew));
+    wrap.append(tuple);
+    return wrap;
+}
+
 function refreshMenuLabels() {
     // Each row is built from three parts so the visual hierarchy is
     // explicit: a title span carrying the tab name in --text weight,
@@ -2829,32 +2929,22 @@ function refreshMenuLabels() {
     // active tab reads with matching hierarchy, no chevron there
     // since it is the current page rather than a destination.
     let activeBase = "";
-    let activeCounts = "";
+    let activeIsNew = false;
     for (const btn of menuEl.querySelectorAll("button[data-view]")) {
         const v = btn.dataset.view;
         const base = MENU_BASE[v] || btn.dataset.base || "";
-        let counts = "";
-        if (v === "new") {
-            const s = menuStats.new;
-            counts = `${s.done}/${s.newLeft}/${s.dueAhead}`;
-        }
-        // Sentence Forming and Word Order intentionally drop their
-        // X/Y queue counter from the tab label. The drills are
-        // open-ended practice rather than a daily quota, so a running
-        // counter framed the work as a finite checklist that did not
-        // match how Berke uses them. Daily Words keeps its tuple
-        // because the daily new-card cap and the due queue both
-        // genuinely matter at a glance.
         btn.textContent = "";
         const titleSpan = document.createElement("span");
         titleSpan.className = "menu-title";
         titleSpan.textContent = base;
         btn.append(titleSpan);
-        if (counts) {
-            const c = document.createElement("span");
-            c.className = "menu-count";
-            c.textContent = counts;
-            btn.append(c);
+        // Daily Words is the only tab with a live counter: a NEW/REVIEW chip
+        // plus the done / new-left / past-left tuple, the active side
+        // highlighted. Sentence Forming and Word Order intentionally dropped
+        // their X/Y counters as open-ended practice rather than a daily
+        // quota; Progress and Custom Words never had one.
+        if (v === "new") {
+            btn.append(buildDailyCountEls(menuStats.new, false));
         }
         // The Progress row carries a mini five-day streak strip in
         // place of a count, colored by the same four-tier intensity
@@ -2882,44 +2972,44 @@ function refreshMenuLabels() {
         btn.append(chev);
         if (btn.classList.contains("active")) {
             activeBase = base;
-            activeCounts = counts;
+            activeIsNew = (v === "new");
         }
     }
     const triggerLbl = document.getElementById("menu-trigger-label");
     if (triggerLbl && activeBase) {
         triggerLbl.textContent = "";
         triggerLbl.append(document.createTextNode(activeBase));
-        if (activeCounts) {
-            const c = document.createElement("span");
-            c.className = "menu-trigger-count";
-            c.textContent = activeCounts;
-            triggerLbl.append(c);
+        // Mirror the Daily Words chip + highlighted tuple into the always-
+        // visible header when that tab is active, so the user sees the
+        // current card's new/past state without opening the dropdown.
+        if (activeIsNew) {
+            triggerLbl.append(buildDailyCountEls(menuStats.new, true));
         }
     }
 }
 
 // Translate a /api/next response into the Daily Words counters.
 //
-// The server reports queue.new_remaining as the count of new cards
-// still to come, decremented by one when the current card is itself
-// new (since the user is staring at it but has not graded it yet).
-// To present a stable user-facing reading, we add that one back when
-// is_new=true so newLeft always counts "current plus future" and
-// done counts "already graded" only.
+// The server's queue block is session-relative: new_done/review_done are the
+// counts graded so far today, while new_remaining and due_ahead EXCLUDE the
+// card currently in front of the user (they describe what is still queued
+// behind it). To present a stable "including the one you are looking at"
+// reading, we add the current card back into whichever count its kind
+// belongs to. card_kind is new|review|learning|relearning; everything that
+// is not 'new' is a card "from the past" and counts toward dueAhead.
 //
-//     done    = NEW_CAP - newRem - (is_new ? 1 : 0)
-//     newLeft = newRem + (is_new ? 1 : 0)
-//     dueAhead = q.due_ahead, the server already excludes the current
-//                card from this when it is a review.
+//     done     = q.new_done                       (new cards graded today)
+//     newLeft  = q.new_remaining + (isNew ? 1 : 0)
+//     dueAhead = q.due_ahead     + (isNew ? 0 : 1)
 function updateNewProgressFromQueue(payload) {
     if (!payload) return;
     const q = payload.queue || {};
-    const newRem = q.new_remaining || 0;
-    const dueAhead = q.due_ahead || 0;
-    const adjust = payload.is_new ? 1 : 0;
-    menuStats.new.done = Math.max(0, NEW_CAP - newRem - adjust);
-    menuStats.new.newLeft = Math.max(0, newRem + adjust);
-    menuStats.new.dueAhead = dueAhead;
+    const kind = payload.card_kind || (payload.is_new ? "new" : "review");
+    const isNew = kind === "new";
+    menuStats.new.done = Math.max(0, q.new_done || 0);
+    menuStats.new.newLeft = Math.max(0, (q.new_remaining || 0) + (isNew ? 1 : 0));
+    menuStats.new.dueAhead = Math.max(0, (q.due_ahead || 0) + (isNew ? 0 : 1));
+    menuStats.new.kind = kind;
     refreshMenuLabels();
 }
 
@@ -2933,17 +3023,19 @@ function updateNewProgressFromQueue(payload) {
 // calling it for the count payload alone is safe and idempotent.
 async function prefetchNewCountsForMenu() {
     try {
-        const r = await fetch(`/api/next?new=${NEW_CAP}`);
+        const r = await fetch(`/api/next?new=${NEW_CAP}&review=${REVIEW_CAP}`);
         if (!r.ok) return;
         const j = await r.json();
         if (typeof j.history === "number") setHistoryCount(j.history);
         if (j.empty) return;
         if (j.done) {
             // No cards left for the day, mirror the in-view done
-            // state: every new slot accounted for, no reviews queued.
+            // state: every new slot accounted for, no reviews queued,
+            // chip cleared since there is no card in view.
             menuStats.new.done = NEW_CAP;
             menuStats.new.newLeft = 0;
             menuStats.new.dueAhead = 0;
+            menuStats.new.kind = null;
             refreshMenuLabels();
             return;
         }
@@ -3024,6 +3116,23 @@ function setKeyRowState(state) {
     }
 }
 
+// Small status pill on the card itself, echoing the Daily Words tab chip so
+// the user can tell at a glance whether the word in front of them is brand
+// new or one seen before ("from the past"). card.card_kind is set by
+// fetchNext / undoLast in the Daily Words flow; it is absent in the drills,
+// where this renders nothing.
+const CARD_KIND_LABELS = {
+    new: { label: "New", cls: "k-new" },
+    review: { label: "Review", cls: "k-review" },
+    learning: { label: "Learning", cls: "k-review" },
+    relearning: { label: "Relearning", cls: "k-review" },
+};
+function appendKindBadge(lemmaRow, card) {
+    const meta = card && CARD_KIND_LABELS[card.card_kind];
+    if (!meta) return;
+    lemmaRow.append(el("span", { className: "card-kind-badge " + meta.cls }, meta.label));
+}
+
 function renderHeader(card) {
     // Lemma and POS are shown identically across all three states so
     // the visual anchor stays put while content reveals beneath it.
@@ -3036,6 +3145,7 @@ function renderHeader(card) {
     if (card.article) lemma.append(el("span", { className: "article" }, card.article));
     lemma.append(document.createTextNode(card.lemma));
     lemmaRow.append(lemma);
+    appendKindBadge(lemmaRow, card);
     cardEl.append(lemmaRow);
     appendPosRow(card);
 }
@@ -3075,6 +3185,7 @@ function renderMid(card) {
     if (card.english) {
         lemmaRow.append(el("span", { className: "lemma-en" }, card.english));
     }
+    appendKindBadge(lemmaRow, card);
     cardEl.append(lemmaRow);
     appendPosRow(card);
 
@@ -3106,6 +3217,7 @@ function renderBack(card) {
     if (card.english) {
         lemmaRow.append(el("span", { className: "lemma-en" }, card.english));
     }
+    appendKindBadge(lemmaRow, card);
     cardEl.append(lemmaRow);
     appendPosRow(card);
 
@@ -3210,7 +3322,7 @@ async function fetchNext() {
     seenSenses = new Set();
     cardUndoStack = [];
     refreshUndoEnabled();
-    const r = await fetch(`/api/next?new=${NEW_CAP}`);
+    const r = await fetch(`/api/next?new=${NEW_CAP}&review=${REVIEW_CAP}`);
     const j = await r.json();
     setHistoryCount(j.history);
     if (j.empty) { renderEmpty(); return; }
@@ -3222,12 +3334,13 @@ async function fetchNext() {
                 const stats = await sr.json();
                 await fetch("/api/finish", { method: "POST" });
                 // The done state pins the menu counters: every new
-                // card is graded, no review remains, so the tuple
-                // collapses to NEW_CAP / 0 / 0.
+                // card is graded, nothing remains queued, so the tuple
+                // collapses to <new graded> / 0 / 0 and the chip clears.
                 menuStats.new.done = stats && typeof stats.new_seen === "number"
                     ? stats.new_seen : NEW_CAP;
                 menuStats.new.newLeft = 0;
                 menuStats.new.dueAhead = 0;
+                menuStats.new.kind = null;
                 refreshMenuLabels();
                 renderDone(stats);
             } catch { renderDone(null); }
@@ -3237,6 +3350,9 @@ async function fetchNext() {
         return;
     }
     current = j.card;
+    // Stash the card kind on the card object so the render path can show the
+    // New/Review badge. The server sends it top-level, not inside card.
+    current.card_kind = j.card_kind || (j.is_new ? "new" : "review");
     updateNewProgressFromQueue(j);
     renderFront(current);
 }
@@ -3303,6 +3419,9 @@ async function undoLast() {
         const j = await r.json();
         setHistoryCount(j.history);
         current = j.card;
+        // Restore the kind so the card badge and tab chip match the card
+        // being re-displayed (this is its pre-grade state).
+        current.card_kind = j.card_kind || (j.is_new ? "new" : "review");
         // Adjust the Daily Words counters in place. If the undone card
         // was a new card, the daily new-seen tally drops by one and
         // newLeft picks the slot back up. If it was a review, the
@@ -3316,6 +3435,7 @@ async function undoLast() {
         } else {
             menuStats.new.dueAhead = menuStats.new.dueAhead + 1;
         }
+        menuStats.new.kind = current.card_kind;
         refreshMenuLabels();
         cardState = "front";
         activeSenseIdx = 0;

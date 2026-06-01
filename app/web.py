@@ -50,19 +50,34 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 # one process. If the server restarts the counters reset, which is fine.
 _session_today: str = today_iso()
 _session_new_seen: int = 0
+# Review-state cards graded today. Drives the daily review cap the same way
+# _session_new_seen drives the new cap. Learning and relearning grades are
+# deliberately not counted here: those are short in-session steps (1m, 10m),
+# not fresh reviews, so they stay uncapped and always surface when due.
+_session_review_seen: int = 0
 _session_correct: int = 0
 _session_wrong: int = 0
 _session_new_words_logged: list[dict] = []
 
+# Default daily caps. Both are overridable per-request via the `new` and
+# `review` query params on /api/next. The review cap exists so a backlog of
+# overdue cards (eg after a few days away) does not wall off the day's new
+# words: once the cap is reached, the queue flows to new material instead of
+# forcing the user through every overdue review first.
+DEFAULT_NEW_CAP = 20
+DEFAULT_REVIEW_CAP = 50
+
 
 def _reset_if_new_day() -> None:
     """Reset the per-day counters when the date rolls over."""
-    global _session_today, _session_new_seen, _session_correct, _session_wrong
+    global _session_today, _session_new_seen, _session_review_seen
+    global _session_correct, _session_wrong
     global _session_new_words_logged
     today = today_iso()
     if today != _session_today:
         _session_today = today
         _session_new_seen = 0
+        _session_review_seen = 0
         _session_correct = 0
         _session_wrong = 0
         _session_new_words_logged = []
@@ -101,11 +116,28 @@ def api_next():
     """Return the next card or {"done": true}.
 
     Query params:
-        new : daily new-card cap (default 20)
+        new    : daily new-card cap (default 20)
+        review : daily review-card cap (default 50)
+
+    Queue order:
+        1. Due learning/relearning cards, always, oldest-due first. These are
+           short in-session steps and are never capped.
+        2. An interleave of due review cards (up to the review cap) and new
+           cards (up to the new cap). Rather than draining every review before
+           the first new card, we serve whichever stream is proportionally
+           further behind its own cap, so new words are sprinkled through the
+           review load instead of walled off behind it.
+
+    The card returned carries `card_kind` (new|review|learning|relearning) and
+    a `queue` block whose counts are session-relative: *_done is graded so far
+    today, *_remaining excludes the card being returned. The frontend renders
+    the New/Review badge and the tab counters from these.
     """
     _reset_if_new_day()
-    new_cap = int(request.args.get("new", 20))
+    new_cap = max(0, int(request.args.get("new", DEFAULT_NEW_CAP)))
+    review_cap = max(0, int(request.args.get("review", DEFAULT_REVIEW_CAP)))
     new_remaining = max(0, new_cap - _session_new_seen)
+    review_remaining = max(0, review_cap - _session_review_seen)
 
     conn = db.connect()
     db.init_db(conn)
@@ -113,25 +145,74 @@ def api_next():
         return jsonify({"empty": True})
 
     now = datetime.now(timezone.utc)
-    due = db.due_word_ids(conn, now=now, limit=10000)
     history = db.history_count(conn)
-    if due:
+
+    # Pool sizes for the queue counters, capped to today's quotas.
+    review_due_total = db.due_count(conn, now=now, states=("review",))
+    new_pool = db.count_new(conn)
+    reviews_left = min(review_remaining, review_due_total)
+    new_left = min(new_remaining, new_pool)
+
+    def respond(word_id: int, kind: str, *, review_after: int, new_after: int):
+        # learning/relearning still queued after the current card, surfaced so
+        # the user sees there is short-step work pending. Recomputed each call.
+        learn_pending = db.due_count(conn, now=now, states=("learning", "relearning"))
+        if kind in ("learning", "relearning"):
+            learn_pending = max(0, learn_pending - 1)
         return jsonify({
-            "card": _card_payload(conn, due[0]),
-            "is_new": False,
-            "queue": {"due_ahead": len(due) - 1, "new_remaining": new_remaining},
+            "card": _card_payload(conn, word_id),
+            "is_new": kind == "new",
+            "card_kind": kind,
+            "queue": {
+                "new_done": _session_new_seen,
+                "review_done": _session_review_seen,
+                "new_remaining": max(0, new_after),
+                # due_ahead folds the capped reviews and the always-on learning
+                # steps still queued, ie every "from the past" card left today.
+                "due_ahead": max(0, review_after) + learn_pending,
+            },
             "history": history,
         })
 
-    if new_remaining > 0:
+    # 1. Learning / relearning first, always, never capped.
+    learn = db.due_word_ids(conn, now=now, limit=10000, states=("learning", "relearning"))
+    if learn:
+        wid = learn[0]
+        kind = db.get_or_create_review(conn, wid, due_at=now).state
+        return respond(wid, kind, review_after=reviews_left, new_after=new_left)
+
+    # 2. Interleave review and new. Decide which stream is further behind its
+    #    cap and serve from that one. Ties favor review so older, at-risk
+    #    words are not starved by a long run of new cards.
+    can_review = reviews_left > 0
+    can_new = new_left > 0
+
+    if can_review and can_new:
+        new_frac = _session_new_seen / new_cap if new_cap else 1.0
+        review_frac = _session_review_seen / review_cap if review_cap else 1.0
+        pick_new = new_frac < review_frac
+    elif can_new:
+        pick_new = True
+    elif can_review:
+        pick_new = False
+    else:
+        return jsonify({"done": True, "history": history})
+
+    if pick_new:
         new_ids = db.new_word_ids(conn, limit=1)
         if new_ids:
-            return jsonify({
-                "card": _card_payload(conn, new_ids[0]),
-                "is_new": True,
-                "queue": {"due_ahead": 0, "new_remaining": new_remaining - 1},
-                "history": history,
-            })
+            return respond(
+                new_ids[0], "new",
+                review_after=reviews_left, new_after=new_left - 1,
+            )
+        # New pool raced empty between count and fetch; fall through to review.
+
+    review_ids = db.due_word_ids(conn, now=now, limit=1, states=("review",))
+    if review_ids:
+        return respond(
+            review_ids[0], "review",
+            review_after=reviews_left - 1, new_after=new_left,
+        )
 
     return jsonify({"done": True, "history": history})
 
@@ -142,7 +223,8 @@ def api_grade():
 
     Body: {"word_id": int, "grade": 1..4}
     """
-    global _session_new_seen, _session_correct, _session_wrong
+    global _session_new_seen, _session_review_seen
+    global _session_correct, _session_wrong
     global _session_new_words_logged
 
     data = request.get_json(force=True) or {}
@@ -155,6 +237,12 @@ def api_grade():
     now = datetime.now(timezone.utc)
     prev = db.get_or_create_review(conn, word_id, due_at=now)
     was_new = prev.state == "new"
+    # Count this grade against the daily review cap only if the card was a
+    # genuine review (not new, not a learning/relearning short step). A review
+    # graded 'again' becomes relearning and returns within the session, but it
+    # has already been counted here and will not be 'review' on its return.
+    if prev.state == "review":
+        _session_review_seen += 1
     new = srs.review(prev, grade, at=now)
     db.save_review(conn, word_id, new)
     db.log_review(conn, word_id=word_id, when=now, grade=grade, prev=prev, new=new)
@@ -194,7 +282,8 @@ def api_undo():
     progress bar reflects the rewind. Returns the restored card so the
     frontend can render it on its front and let the user re-grade.
     """
-    global _session_new_seen, _session_correct, _session_wrong
+    global _session_new_seen, _session_review_seen
+    global _session_correct, _session_wrong
     global _session_new_words_logged
 
     conn = db.connect()
@@ -208,6 +297,10 @@ def api_undo():
         _session_wrong = max(0, _session_wrong - 1)
     else:
         _session_correct = max(0, _session_correct - 1)
+    # Mirror the cap accounting in /api/grade: only review-state grades were
+    # counted, so only those get rolled back here.
+    if res.get("prev_state") == "review":
+        _session_review_seen = max(0, _session_review_seen - 1)
     if res["was_new"]:
         _session_new_seen = max(0, _session_new_seen - 1)
         # Find the buffered row to derive the exact word string used in the
@@ -234,6 +327,7 @@ def api_undo():
         "ok": True,
         "card": payload,
         "is_new": res["was_new"],
+        "card_kind": res.get("prev_state") or ("new" if res["was_new"] else "review"),
         "history": db.history_count(conn),
     })
 
@@ -994,6 +1088,7 @@ def api_session():
     return jsonify({
         "today": _session_today,
         "new_seen": _session_new_seen,
+        "review_seen": _session_review_seen,
         "correct": _session_correct,
         "wrong": _session_wrong,
         "pass_pct": pct,
