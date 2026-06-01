@@ -2007,47 +2007,26 @@ nav.menu button.active {
     letter-spacing: 0.02em;
 }
 
-/* NEW / REVIEW indicator on the Daily Words tab. A small colored chip says
-   whether the current card is a new word or one from the past, and the
-   matching number in the done / new-left / past-left tuple is bolded and
-   tinted the same hue so the eye lands on the count that is moving. Green
-   reads as new growth, blue as the review backlog, matching the card badge. */
-.kind-chip {
-    display: inline-block;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 1px 5px;
-    border-radius: 999px;
-    margin-right: 7px;
-    line-height: 1.5;
+/* The hot number is the one slot in the tuple that is actually counting
+   down for the current card: new-left for a new card, due-ahead for a
+   review. Coloring it green (new) or brown (review) makes the eye land on
+   the figure that is moving, and is the only cue to the card's kind now
+   that the textual chip is gone. The other two numbers stay quiet metadata
+   in the resting --faint. */
+.menu-count .ct,
+.menu-trigger-count .ct {
+    font-variant-numeric: tabular-nums;
 }
-.kind-chip.k-new { color: var(--good); background: color-mix(in srgb, var(--good) 15%, transparent); }
-.kind-chip.k-review { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
-.menu-count .ct .n.hot,
-.menu-trigger-count .ct .n.hot { font-weight: 700; }
-.menu-count.k-new .n.hot,
-.menu-trigger-count.k-new .n.hot { color: var(--good); }
-.menu-count.k-review .n.hot,
-.menu-trigger-count.k-review .n.hot { color: var(--accent); }
-
-/* Status pill on the card itself, echoing the tab chip. Floats to the right
-   edge of the lemma row (margin-left:auto against the flex row) and centers
-   against the big serif lemma rather than sitting on its baseline. */
-.card-kind-badge {
-    margin-left: auto;
-    align-self: center;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    padding: 2px 9px;
-    border-radius: 999px;
-    white-space: nowrap;
+.menu-count.k-new .ct .n.hot,
+.menu-trigger-count.k-new .ct .n.hot {
+    color: var(--good);
+    font-weight: 600;
 }
-.card-kind-badge.k-new { color: var(--good); background: color-mix(in srgb, var(--good) 13%, transparent); }
-.card-kind-badge.k-review { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.menu-count.k-review .ct .n.hot,
+.menu-trigger-count.k-review .ct .n.hot {
+    color: var(--accent);
+    font-weight: 600;
+}
 
 /* Fullscreen mode keeps the title trigger visible so the user can
    still see which mode they are in and switch tabs without leaving
@@ -2869,37 +2848,30 @@ async function prefetchStreakForMenu() {
     } catch (e) { /* network glitch, leave the cached strip alone */ }
 }
 
-// Map a card kind to its tab-chip label and class. The tab only needs the
-// binary "new vs from the past" distinction the user asked for, so review,
-// learning, and relearning all collapse to one REVIEW chip. null (no card in
-// view) yields no chip.
-function kindChipMeta(kind) {
-    if (kind === "new") return { label: "NEW", cls: "k-new" };
-    if (kind === "review" || kind === "learning" || kind === "relearning") {
-        return { label: "REVIEW", cls: "k-review" };
-    }
+// Map a card kind to the color class that tints the one highlighted count.
+// New cards get green k-new, every review-side state (review, plus the
+// mid-flight learning and relearning steps) gets brown k-review. null (no
+// card in view) leaves the numbers in their neutral resting color.
+function kindColorClass(kind) {
+    if (kind === "new") return "k-new";
+    if (kind === "review" || kind === "learning" || kind === "relearning") return "k-review";
     return null;
 }
 
-// Build the Daily Words count display: a NEW/REVIEW chip followed by the
-// done / new-left / past-left tuple, with the side matching the current card
-// highlighted (.hot). When a new word is up, the middle (new-left) number is
-// hot; for any review/learning/relearning card the right (past-left) number
-// is hot. forTrigger swaps the wrapper class so the always-visible active-tab
-// header and the dropdown row share one builder.
+// Build the Daily Words count display: the done / new-left / past-left tuple
+// with the slot that matters for the current card highlighted (.hot) and
+// tinted by kind, which is now the only cue to whether the card is new or a
+// review. When a new word is up the middle (new-left) number is hot; for any
+// review/learning/relearning card the right (past-left) number is hot.
+// forTrigger swaps the wrapper class so the always-visible active-tab header
+// and the dropdown row share one builder.
 function buildDailyCountEls(s, forTrigger) {
     const wrap = document.createElement("span");
     wrap.className = forTrigger ? "menu-trigger-count" : "menu-count";
-    const chip = kindChipMeta(s.kind);
-    if (chip) {
-        // Tag the wrapper with the kind so CSS can tint the highlighted
-        // number to match the chip (green for new, blue for review).
-        wrap.classList.add(chip.cls);
-        const ch = document.createElement("span");
-        ch.className = "kind-chip " + chip.cls;
-        ch.textContent = chip.label;
-        wrap.append(ch);
-    }
+    // The kind class on the wrapper is what lets CSS color the hot number
+    // green or brown, standing in for the removed textual chip.
+    const cls = kindColorClass(s.kind);
+    if (cls) wrap.classList.add(cls);
     const isNew = s.kind === "new";
     const hasCard = s.kind != null;
     const mk = (val, hot) => {
@@ -3116,23 +3088,6 @@ function setKeyRowState(state) {
     }
 }
 
-// Small status pill on the card itself, echoing the Daily Words tab chip so
-// the user can tell at a glance whether the word in front of them is brand
-// new or one seen before ("from the past"). card.card_kind is set by
-// fetchNext / undoLast in the Daily Words flow; it is absent in the drills,
-// where this renders nothing.
-const CARD_KIND_LABELS = {
-    new: { label: "New", cls: "k-new" },
-    review: { label: "Review", cls: "k-review" },
-    learning: { label: "Learning", cls: "k-review" },
-    relearning: { label: "Relearning", cls: "k-review" },
-};
-function appendKindBadge(lemmaRow, card) {
-    const meta = card && CARD_KIND_LABELS[card.card_kind];
-    if (!meta) return;
-    lemmaRow.append(el("span", { className: "card-kind-badge " + meta.cls }, meta.label));
-}
-
 function renderHeader(card) {
     // Lemma and POS are shown identically across all three states so
     // the visual anchor stays put while content reveals beneath it.
@@ -3145,7 +3100,6 @@ function renderHeader(card) {
     if (card.article) lemma.append(el("span", { className: "article" }, card.article));
     lemma.append(document.createTextNode(card.lemma));
     lemmaRow.append(lemma);
-    appendKindBadge(lemmaRow, card);
     cardEl.append(lemmaRow);
     appendPosRow(card);
 }
@@ -3185,7 +3139,6 @@ function renderMid(card) {
     if (card.english) {
         lemmaRow.append(el("span", { className: "lemma-en" }, card.english));
     }
-    appendKindBadge(lemmaRow, card);
     cardEl.append(lemmaRow);
     appendPosRow(card);
 
@@ -3217,7 +3170,6 @@ function renderBack(card) {
     if (card.english) {
         lemmaRow.append(el("span", { className: "lemma-en" }, card.english));
     }
-    appendKindBadge(lemmaRow, card);
     cardEl.append(lemmaRow);
     appendPosRow(card);
 
