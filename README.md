@@ -43,7 +43,7 @@ Requires Python 3.10 or newer. Flask is installed automatically into a local vir
 ### One command, any OS
 
 ```bash
-git clone https://github.com/<your-user>/dutch-srs-training.git
+git clone https://github.com/BerkeYazan/dutch-srs-training.git
 cd dutch-srs-training
 python3 run.py
 ```

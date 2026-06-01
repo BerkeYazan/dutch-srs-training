@@ -7,7 +7,7 @@ Thanks for considering a change. The project is small, the bar is low, and most 
 Same steps as a fresh install. Python 3.10 or newer.
 
 ```bash
-git clone https://github.com/<your-user>/dutch-srs-training.git
+git clone https://github.com/BerkeYazan/dutch-srs-training.git
 cd dutch-srs-training
 python3 -m venv .venv
 source .venv/bin/activate
